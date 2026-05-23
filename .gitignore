@@ -1,0 +1,28 @@
+# Environment variables (may contain real API keys — never commit)
+.env
+.env.local
+.env.*.local
+be/.env
+fe/.env
+
+# Dependencies
+node_modules/
+be/node_modules/
+fe/node_modules/
+
+# Build output
+be/dist/
+fe/.next/
+fe/out/
+
+# TypeScript build info
+fe/tsconfig.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
