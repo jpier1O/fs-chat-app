@@ -32,7 +32,7 @@ export class LlmService {
 
     this.genAI = new GoogleGenerativeAI(apiKey);
 
-    const modelName = process.env.LLM_MODEL || 'gemini-2.0-flash-exp';
+    const modelName = process.env.LLM_MODEL || 'gemini-1.5-flash';
 
     const tools: Tool[] = [
       {

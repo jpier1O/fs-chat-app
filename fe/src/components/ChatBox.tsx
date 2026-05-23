@@ -89,27 +89,34 @@ export default function ChatBox({ sessionId: _sessionId, initialMessages }: Chat
         let turnIndex = 0;
 
         // user message with empty bot bubble together to real state.
-        setMessages((prev) => [
-          ...prev,
-          userMessage,
-          {
-            id: botMessageId,
-            type: 'bot' as const,
-            content: '',
-            timestamp: new Date(),
-            isStreaming: true,
-          } as Message,
-        ]);
+        setMessages((prev) => {
+          const hasUser = prev.some((m) => m.id === userMessage.id);
+          return [
+            ...prev,
+            ...(hasUser ? [] : [userMessage]),
+            {
+              id: botMessageId,
+              type: 'bot' as const,
+              content: '',
+              timestamp: new Date(),
+              isStreaming: true,
+            } as Message,
+          ];
+        });
 
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         if (!reader) throw new Error('No response body');
 
+        let lineBuffer = '';
         outer: while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const lines = decoder.decode(value).split('\n');
+          lineBuffer += decoder.decode(value, { stream: true });
+          const lines = lineBuffer.split('\n');
+          lineBuffer = lines.pop() ?? '';
+
           for (const line of lines) {
             if (!line.startsWith('data: ')) continue;
             try {
@@ -147,6 +154,15 @@ export default function ChatBox({ sessionId: _sessionId, initialMessages }: Chat
             }
           }
         }
+
+        // Ensure isStreaming is cleared even if done event was missed
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === botMessageId && (msg as Message & { isStreaming?: boolean }).isStreaming
+              ? { ...msg, isStreaming: false }
+              : msg,
+          ),
+        );
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown error';
         if (errorMessage === 'SESSION_NOT_FOUND' || errorMessage === 'SESSION_EXPIRED') {

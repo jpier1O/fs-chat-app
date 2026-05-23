@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Injectable, NotFoundException, GoneException, Inject } from '@nestjs/common';
 import type Redis from 'ioredis';
 
@@ -26,7 +27,7 @@ export class SessionService {
   }
 
   async createSession(): Promise<string> {
-    const sessionId = crypto.randomUUID();
+    const sessionId = randomUUID();
     const now = this.now().toISOString();
     const session: Session = {
       id: sessionId,

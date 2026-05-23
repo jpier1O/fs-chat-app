@@ -3,14 +3,11 @@ import type { SendMessageResponse, HistoryResponse } from '@/types/chat';
 // Use server-side API_URL or client-side NEXT_PUBLIC_API_URL
 const getApiUrl = () => {
   if (typeof window === 'undefined') {
-    // Server-side
     return process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
   }
-  // Client-side
   return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 };
 
-// Server-side function to get chat history
 export async function getHistory(sessionId: string): Promise<HistoryResponse> {
   const API_URL = getApiUrl();
   
@@ -33,7 +30,6 @@ export async function getHistory(sessionId: string): Promise<HistoryResponse> {
   }
 }
 
-// Client-side function to send message
 export async function sendMessage(
   sessionId: string,
   message: string
