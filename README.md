@@ -4,81 +4,223 @@ A full-stack chat application: **NestJS** backend with SSE streaming and tool ca
 
 ---
 
-## Local Setup
+## Running Locally
 
 ### Prerequisites
-- Node.js 18+
-- pnpm
-- A Google Gemini API key (Gemini 2.0 Flash or 2.5 Flash)
 
-### 1 · Configure environment
+- Node.js 18+
+- pnpm (`npm install -g pnpm`)
+- A Google Gemini API key — get one at [aistudio.google.com](https://aistudio.google.com)
+
+### 1 · Environment variables
 
 ```bash
 cp env.example .env
-# Fill in LLM_API_KEY with your Gemini key
 ```
 
-### 2 · Install and run backend
+Open `.env` and set:
+
+```env
+LLM_API_KEY=your_gemini_api_key_here
+LLM_MODEL=gemini-2.5-flash
+```
+
+### 2 · Start the backend
 
 ```bash
 cd be
 pnpm install
-pnpm start:dev        # http://localhost:3000
+pnpm start:dev
+# Listening on http://localhost:3000
 ```
 
-### 3 · Install and run frontend
+### 3 · Start the frontend
+
+Open a second terminal:
 
 ```bash
-cd ../fe
+cd fe
 pnpm install
-pnpm dev              # http://localhost:3001
+pnpm dev
+# Listening on http://localhost:3001
 ```
 
-Open **http://localhost:3001** — the Server Component reads or creates a session and passes initial history to the chat client.
+Open **http://localhost:3001** — the page creates a session automatically and renders the chat UI.
 
----
+### Docker (alternative)
 
-## Docker
+Requires Docker Desktop running.
 
 ```bash
-cp env.example .env   # add your LLM_API_KEY
+cp env.example .env   # fill in LLM_API_KEY
 docker compose up --build
 ```
 
 - Backend → http://localhost:3000
 - Frontend → http://localhost:3001
 
-The `backend` service includes a health-check (`GET /health`); the `frontend` service waits for it before starting.
+The frontend service waits for the backend health-check before starting.
 
 ---
 
-## Sample Q&A pairs
+## Test Scenarios
 
-### 1 — Plain domain knowledge (cooking)
+### Automated tests
 
-> **User:** What are the key steps to making a good risotto?
->
-> **Assistant:** Great risotto comes down to a few principles: use a high-starch rice like Arborio or Carnaroli, toast it briefly in butter or oil before adding liquid, and add warm stock one ladle at a time — never dump it all in at once. Stir frequently so the starch releases slowly, creating that creamy texture without cream. Finish off the heat with cold butter and Parmigiano (the *mantecatura* step) for silkiness. Total cook time is usually 18–20 minutes once the stock starts going in.
+```bash
+# Backend unit tests (Jest + NestJS testing utilities)
+cd be && pnpm test
 
-### 2 — Tool call triggered (`lookup_recipe`)
+# Frontend unit tests (Jest + @testing-library/react)
+cd fe && pnpm test
+```
 
-> **User:** Can you give me the exact recipe for chocolate chip cookies?
->
-> **Assistant:** *(calls `lookup_recipe` with `recipe_name: "chocolate chip cookies"`)* Here's the classic Toll House recipe:
->
-> **Ingredients:** 2¼ cups flour, 1 tsp baking soda, 1 tsp salt, 1 cup softened butter, ¾ cup granulated sugar, ¾ cup brown sugar, 2 eggs, 2 tsp vanilla, 2 cups chocolate chips.
->
-> **Instructions:** Preheat to 375 °F. Whisk together flour, baking soda, and salt. Beat butter and sugars until creamy; add eggs and vanilla. Blend in flour mixture; stir in chips. Drop rounded tablespoons on ungreased sheets and bake 9–11 minutes until golden. Makes ~48 cookies.
+### API test scenarios (curl)
 
-*(The tool_use → NestJS handler → tool_result cycle completes before the first token is streamed to the client.)*
+Run these against the local backend (`http://localhost:3000`) or the deployed instance.
 
-### 3 — Off-topic refusal enforced by system prompt
+#### Setup — create a session
 
-> **User:** What do you think about the latest election results?
->
-> **Assistant:** I'm sorry, but I can only help with cooking recipes, programming questions, and company information. Please ask me something related to these topics.
+```bash
+SESSION=$(curl -s -X POST http://localhost:3000/chat/session | jq -r '.sessionId')
+echo "Session: $SESSION"
+```
 
-*(Off-topic refusals are enforced via the system prompt; the `finish_reason` is also inspected server-side so the app does not depend solely on model compliance.)*
+---
+
+#### Scenario 1 — Plain domain knowledge (no tool call)
+
+```bash
+curl -N -X POST "http://localhost:3000/chat/$SESSION/message" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What are the key steps to making a good risotto?"}'
+```
+
+Expected: streaming tokens with risotto advice. No tool call triggered.
+
+---
+
+#### Scenario 2 — Tool call: `lookup_recipe`
+
+```bash
+curl -N -X POST "http://localhost:3000/chat/$SESSION/message" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What ingredients do I need for chocolate chip cookies?"}'
+```
+
+Expected: Gemini calls `lookup_recipe("chocolate chip cookies")` internally, then streams the structured ingredient list. Tool resolution happens server-side before the first token arrives.
+
+---
+
+#### Scenario 3 — Tool call: `run_typescript_code`
+
+```bash
+curl -N -X POST "http://localhost:3000/chat/$SESSION/message" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Can you calculate 2 to the power of 10 using TypeScript?"}'
+```
+
+Expected: Gemini calls `run_typescript_code("Math.pow(2, 10)")`, gets `1024`, then streams the answer.
+
+---
+
+#### Scenario 4 — Tool call: `get_department_info`
+
+```bash
+curl -N -X POST "http://localhost:3000/chat/$SESSION/message" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Tell me about the Engineering department"}'
+```
+
+Expected: Gemini calls `get_department_info("Engineering")` and streams department details (head, team size, responsibilities).
+
+---
+
+#### Scenario 5 — Off-topic refusal
+
+```bash
+curl -N -X POST "http://localhost:3000/chat/$SESSION/message" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What do you think about the latest election results?"}'
+```
+
+Expected:
+```
+I'm sorry, but I can only help with cooking recipes, programming questions, and company information.
+```
+
+Refusals are enforced via the system prompt **and** by inspecting `finish_reason === 'SAFETY'` server-side.
+
+---
+
+#### Scenario 6 — Multi-turn memory
+
+```bash
+# Turn 1
+curl -N -X POST "http://localhost:3000/chat/$SESSION/message" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What ingredients do I need for spaghetti carbonara?"}'
+
+# Turn 2 — refers back to the previous answer
+curl -N -X POST "http://localhost:3000/chat/$SESSION/message" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How long does it take to cook?"}'
+```
+
+Expected: the second response uses context from turn 1 without needing to re-specify the dish.
+
+Verify history is stored:
+
+```bash
+curl http://localhost:3000/chat/$SESSION/history | jq '.turns | length'
+# Should be 2
+```
+
+---
+
+#### Scenario 7 — Error cases
+
+```bash
+# 400 — empty message
+curl -X POST "http://localhost:3000/chat/$SESSION/message" \
+  -H "Content-Type: application/json" \
+  -d '{"message": ""}'
+# {"statusCode":400,"message":["message should not be empty"],...}
+
+# 404 — unknown session
+curl -X POST "http://localhost:3000/chat/bad-id/message" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hello"}'
+# {"statusCode":404,...}
+
+# 410 — expired session (set SESSION_TIMEOUT_MS = 5000 in session.service.ts to test quickly)
+# After timeout:
+curl "http://localhost:3000/chat/$SESSION/history"
+# {"statusCode":410,...}
+```
+
+---
+
+#### Scenario 8 — Rate limiting
+
+```bash
+for i in $(seq 1 11); do
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -X POST "http://localhost:3000/chat/$SESSION/message" \
+    -H "Content-Type: application/json" \
+    -d '{"message": "ping"}'
+done
+# First 10: 200, 11th: 429
+```
+
+---
+
+#### Scenario 9 — Health check
+
+```bash
+curl http://localhost:3000/health
+# {"status":"ok","timestamp":"...","uptime":42.1,"memory":{...}}
+```
 
 ---
 
@@ -98,13 +240,12 @@ The `backend` service includes a health-check (`GET /health`); the `frontend` se
 **SSE protocol** (`POST /chat/:sessionId/message`):
 
 ```
-data: {"token":"..."}    ← one per chunk
-data: {"token":"..."}
-data: {"done":true,"turnIndex":N}   ← stream close
-data: {"error":"LLM unavailable"}   ← on mid-stream LLM failure
+data: {"token":"..."}                       ← one per chunk
+data: {"done":true,"turnIndex":N}           ← stream close
+data: {"error":"LLM unavailable"}           ← on mid-stream failure
 ```
 
-Tool calls are fully resolved (tool_use → handler → tool_result → final response) **before** the first token is streamed. The completed reply is stored in session history only after `done`.
+Tool calls are fully resolved (tool_use → handler → tool_result → final response) **before** the first token is streamed.
 
 ### Frontend (Next.js 14+ App Router · `fe/`)
 
@@ -115,67 +256,25 @@ app/api/chat/route.ts      ← BFF Route Handler: proxies NestJS SSE stream
 components/ChatBox.tsx     ← 'use client': streaming UI, useOptimistic, SSE reader
 ```
 
-**Session bootstrap (no client-side effect):**
-1. `page.tsx` reads `sessionId` cookie with `cookies()` from `next/headers`
-2. If missing → redirects to `GET /api/session` which creates the session, sets the cookie, and redirects back to `/`
-3. `page.tsx` calls NestJS `/history` server-side and passes `initialMessages` as a prop
-
-**`useOptimistic` flow:**
-- `addOptimistic(userMessage)` is called inside `startTransition` → user bubble appears immediately
-- On success: `setMessages([...prev, userMessage, botBubble])` commits both to real state (supersedes optimistic)
-- On failure before commit: transition settles without `setMessages` → **automatic rollback** — the user bubble disappears
-
 ### BFF Proxy design decision
 
-> **Why proxy NestJS through a Next.js Route Handler instead of calling NestJS directly from the browser?**
+The BFF Route Handler (`app/api/chat/route.ts`) keeps the NestJS origin URL and LLM key off the browser:
 
-The browser's network tab would expose the NestJS origin URL and the LLM API key if they were used client-side. The BFF Route Handler (`app/api/chat/route.ts`) solves this by:
-
-1. Reading the `sessionId` from the **HTTP-only cookie** (inaccessible to JavaScript)
-2. Forwarding the request to NestJS using the server-only `API_URL` env var
-3. **Piping the `ReadableStream` directly** (`new Response(response.body, {...})`) with zero buffering — tokens reach the browser with minimal latency
-4. Translating 404/410 from NestJS into `{ sessionExpired: true }` JSON so the client can clear the cookie and reload cleanly
-
-The NestJS URL and LLM key never appear in the browser's network tab.
+1. Reads `sessionId` from the **HTTP-only cookie** (inaccessible to JavaScript)
+2. Forwards the request to NestJS using the server-only `API_URL` env var
+3. Pipes the `ReadableStream` directly with zero buffering
+4. Translates 404/410 from NestJS into `{ sessionExpired: true }` so the client can reload cleanly
 
 ---
 
-## Testing
-
-```bash
-# Backend (Jest + NestJS testing utilities)
-cd be && pnpm test
-
-# Frontend (Jest + @testing-library/react)
-cd fe && pnpm test
-```
-
-### Backend test surface
-
-| Suite | Coverage |
-|---|---|
-| `SessionService` | Create, retrieve turns, expire after 30 min (mocked `Date.now`), delete |
-| `LlmService` | History passed correctly, token stream forwarded, tool-call loop executed |
-| `ChatController` | 201 on session create, 404 on unknown id, 410 on idle-expired id |
-| `SessionController` | All CRUD paths |
-
-### Frontend test surface
-
-| Suite | Coverage |
-|---|---|
-| `ChatBox` | Renders `initialMessages`, optimistic bubble appears before fetch resolves, streaming token accumulation, rollback on error, session-expired banner, Send disabled in-flight |
-| `/api/chat` Route Handler | Proxies SSE stream correctly, returns `sessionExpired` on 404/410 from NestJS, 400 on empty message, 401 on missing cookie |
-
----
-
-## API reference
+## API Reference
 
 ### NestJS endpoints
 
 | Method | Path | Success | Errors |
 |---|---|---|---|
 | `POST` | `/chat/session` | 201 `{ sessionId }` | — |
-| `POST` | `/chat/:id/message` | 200 SSE stream | 400 empty, 404 unknown, 410 expired |
+| `POST` | `/chat/:id/message` | 200 SSE stream | 400, 404, 410 |
 | `GET` | `/chat/:id/history` | 200 `{ turns }` | 404, 410 |
 | `DELETE` | `/chat/:id` | 204 | 404 |
 | `GET` | `/health` | 200 `{ status, uptime, memory }` | — |
@@ -195,7 +294,7 @@ cd fe && pnpm test
 
 - **Rate limiting** — `RateLimitGuard`: ≤ 10 req/min per IP, returns 429 with `Retry-After`
 - **Health check** — `GET /health` with uptime and memory stats; used as Docker health-check
-- **Auto-scroll** — `useEffect` + `ref` scrolls to the latest message
+- **Auto-scroll** — scrolls to the latest message on each new token
 - **Disable Send in-flight** — button disabled while `isPending` (React transition)
 - **Enter to submit** — `onKeyDown` handler on the input
 - **Relative timestamps** — `Intl.RelativeTimeFormat` ("2 minutes ago")
