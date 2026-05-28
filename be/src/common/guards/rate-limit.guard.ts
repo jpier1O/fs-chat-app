@@ -16,18 +16,16 @@ interface RateLimitEntry {
 export class RateLimitGuard implements CanActivate {
   private readonly requests: Map<string, RateLimitEntry> = new Map();
   private readonly MAX_REQUESTS = 10;
-  private readonly WINDOW_MS = 60 * 1000; // 1 minute
+  private readonly WINDOW_MS = 60 * 1000;
 
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
     const ip = this.getClientIp(request);
     const now = Date.now();
 
-    // Get or create rate limit entry for this IP
     let entry = this.requests.get(ip);
 
     if (!entry || now > entry.resetTime) {
-      // Create new entry or reset expired one
       entry = {
         count: 1,
         resetTime: now + this.WINDOW_MS,
@@ -36,7 +34,6 @@ export class RateLimitGuard implements CanActivate {
       return true;
     }
 
-    // Increment request count
     entry.count++;
 
     if (entry.count > this.MAX_REQUESTS) {
@@ -63,7 +60,6 @@ export class RateLimitGuard implements CanActivate {
     );
   }
 
-  // Cleanup old entries periodically
   cleanup(): void {
     const now = Date.now();
     for (const [ip, entry] of this.requests.entries()) {

@@ -30,14 +30,12 @@ export default async function Home() {
   const cookieStore = await cookies();
   const sessionId = cookieStore.get('sessionId')?.value;
 
-  // No session cookie → Route Handler creates one and sets cookie, then redirects here
   if (!sessionId) {
     redirect('/api/session');
   }
 
-  // Fetch initial history server-side; empty array on any session error
   const historyData = await getHistory(sessionId);
   const initialMessages = turnsToMessages(historyData.turns);
 
-  return <ChatBox sessionId={sessionId} initialMessages={initialMessages} />;
+  return <ChatBox initialMessages={initialMessages} />;
 }

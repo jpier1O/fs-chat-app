@@ -4,9 +4,8 @@ import { NextRequest, NextResponse } from 'next/server';
 const API_URL =
   process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
-// ── Rate-limit constants ──────────────────────────────────────────────────────
 const RL_MAX = 20;
-const RL_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const RL_WINDOW_MS = 60 * 60 * 1000;
 
 interface RateLimitData {
   count: number;
@@ -22,7 +21,6 @@ function parseRateLimitCookie(raw: string | undefined): RateLimitData {
   }
 }
 
-// ── Route Handler ─────────────────────────────────────────────────────────────
 export async function POST(request: NextRequest) {
   try {
     const cookieStore = await cookies();
@@ -32,7 +30,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ sessionExpired: true }, { status: 401 });
     }
 
-    // ── Sliding-window rate limit (per session, cookie-backed) ────────────
     const rawRl = cookieStore.get('bff_rate')?.value;
     const rl = parseRateLimitCookie(rawRl);
     const now = Date.now();
@@ -56,7 +53,6 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // ── Validate body ─────────────────────────────────────────────────────
     const body = await request.json();
     const { message } = body as { message?: string };
 
@@ -64,7 +60,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Message cannot be empty.' }, { status: 400 });
     }
 
-    // ── Proxy to NestJS SSE endpoint ──────────────────────────────────────
     const upstream = await fetch(`${API_URL}/chat/${sessionId}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -83,7 +78,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to send message' }, { status: upstream.status });
     }
 
-    // ── Stream SSE body through, setting the updated rate-limit cookie ────
     return new Response(upstream.body, {
       headers: {
         'Content-Type': 'text/event-stream',

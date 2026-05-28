@@ -8,20 +8,20 @@ import {
   useTransition,
   FormEvent,
 } from 'react';
-import type { Message } from '@/types/chat';
+import type { UserMessage, BotMessage, Message } from '@/types/chat';
 import { clearSession } from '@/lib/chat-api';
 
 interface ChatBoxProps {
-  sessionId: string;
   initialMessages: Message[];
 }
 
-export default function ChatBox({ sessionId: _sessionId, initialMessages }: ChatBoxProps) {
+export default function ChatBox({ initialMessages }: ChatBoxProps) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [optimisticMessages, addOptimistic] = useOptimistic(
     messages,
-    (state, newMessage: Message) => [...state, newMessage],
+    (state: Message[], msg: Message) => [...state, msg],
   );
+  const [streamingBot, setStreamingBot] = useState<BotMessage | null>(null);
   const [input, setInput] = useState('');
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -29,9 +29,13 @@ export default function ChatBox({ sessionId: _sessionId, initialMessages }: Chat
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const displayMessages: Message[] = streamingBot
+    ? [...optimisticMessages, streamingBot]
+    : optimisticMessages;
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [optimisticMessages]);
+  }, [optimisticMessages.length, streamingBot?.content]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -53,7 +57,7 @@ export default function ChatBox({ sessionId: _sessionId, initialMessages }: Chat
     setError(null);
     setInput('');
 
-    const userMessage: Message = {
+    const userMessage: UserMessage = {
       id: crypto.randomUUID(),
       type: 'user',
       content: text,
@@ -61,7 +65,6 @@ export default function ChatBox({ sessionId: _sessionId, initialMessages }: Chat
     };
 
     startTransition(async () => {
-      // Show the user bubble immediately
       addOptimistic(userMessage);
 
       try {
@@ -84,31 +87,24 @@ export default function ChatBox({ sessionId: _sessionId, initialMessages }: Chat
           throw new Error(errorData.error ?? 'Failed to send message');
         }
 
-        const botMessageId = crypto.randomUUID();
+        const botId = crypto.randomUUID();
         let botContent = '';
-        let turnIndex = 0;
 
-        // user message with empty bot bubble together to real state.
-        setMessages((prev) => {
-          const hasUser = prev.some((m) => m.id === userMessage.id);
-          return [
-            ...prev,
-            ...(hasUser ? [] : [userMessage]),
-            {
-              id: botMessageId,
-              type: 'bot' as const,
-              content: '',
-              timestamp: new Date(),
-              isStreaming: true,
-            } as Message,
-          ];
+        setStreamingBot({
+          id: botId,
+          type: 'bot',
+          content: '',
+          timestamp: new Date(),
+          isStreaming: true,
         });
 
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         if (!reader) throw new Error('No response body');
 
+        let turnIndex = 0;
         let lineBuffer = '';
+
         outer: while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -131,22 +127,11 @@ export default function ChatBox({ sessionId: _sessionId, initialMessages }: Chat
 
               if (data.token) {
                 botContent += data.token;
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === botMessageId ? { ...msg, content: botContent } : msg,
-                  ),
-                );
+                setStreamingBot((prev) => (prev ? { ...prev, content: botContent } : null));
               }
 
               if (data.done) {
                 turnIndex = data.turnIndex ?? turnIndex;
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === botMessageId
-                      ? { ...msg, content: botContent, turnIndex, isStreaming: false }
-                      : msg,
-                  ),
-                );
                 break outer;
               }
             } catch {
@@ -155,25 +140,26 @@ export default function ChatBox({ sessionId: _sessionId, initialMessages }: Chat
           }
         }
 
-        // Ensure isStreaming is cleared even if done event was missed
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === botMessageId && (msg as Message & { isStreaming?: boolean }).isStreaming
-              ? { ...msg, isStreaming: false }
-              : msg,
-          ),
-        );
+        setStreamingBot(null);
+        setMessages((prev) => [
+          ...prev,
+          userMessage,
+          {
+            id: botId,
+            type: 'bot' as const,
+            content: botContent,
+            timestamp: new Date(),
+            turnIndex,
+          },
+        ]);
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown error';
         if (errorMessage === 'SESSION_NOT_FOUND' || errorMessage === 'SESSION_EXPIRED') {
           await handleSessionExpired();
           return;
         }
+        setStreamingBot(null);
         setError(errorMessage);
-        // Remove any partial streaming bot bubble.
-        setMessages((prev) =>
-          prev.filter((msg) => !((msg as Message & { isStreaming?: boolean }).isStreaming)),
-        );
       }
     });
   };
@@ -222,13 +208,13 @@ export default function ChatBox({ sessionId: _sessionId, initialMessages }: Chat
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {optimisticMessages.length === 0 && (
+        {displayMessages.length === 0 && (
           <div className="text-center text-gray-500 mt-8">
             <p>Start a conversation by typing a message below.</p>
           </div>
         )}
 
-        {optimisticMessages.map((message) => (
+        {displayMessages.map((message) => (
           <div
             key={message.id}
             className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -242,7 +228,7 @@ export default function ChatBox({ sessionId: _sessionId, initialMessages }: Chat
             >
               <p className="whitespace-pre-wrap wrap-break-word">
                 {message.content}
-                {message.type === 'bot' && (message as { isStreaming?: boolean }).isStreaming && (
+                {message.type === 'bot' && message.isStreaming && (
                   <span className="animate-pulse">|</span>
                 )}
               </p>

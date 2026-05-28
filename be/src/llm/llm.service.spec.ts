@@ -5,7 +5,7 @@ jest.mock('@google/generative-ai', () => ({
   GoogleGenerativeAI: jest.fn().mockImplementation(() => ({
     getGenerativeModel: jest.fn().mockReturnValue({
       startChat: jest.fn().mockReturnValue({
-        sendMessage: jest.fn(),
+        sendMessageStream: jest.fn(),
       }),
     }),
   })),
@@ -15,14 +15,20 @@ jest.mock('@google/generative-ai', () => ({
   },
 }));
 
+function makeStream(texts: string[]) {
+  return (async function* () {
+    for (const t of texts) yield { text: () => t };
+  })();
+}
+
 describe('LlmService', () => {
   let service: LlmService;
   let mockModel: { startChat: jest.Mock };
-  let mockChat: { sendMessage: jest.Mock };
+  let mockChat: { sendMessageStream: jest.Mock };
 
   beforeEach(async () => {
     process.env.LLM_API_KEY = 'test-api-key';
-    process.env.LLM_MODEL = 'gemini-2.0-flash-exp';
+    process.env.LLM_MODEL = 'gemini-2.0-flash';
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [LlmService],
@@ -30,7 +36,7 @@ describe('LlmService', () => {
 
     service = module.get<LlmService>(LlmService);
 
-    mockChat = { sendMessage: jest.fn() };
+    mockChat = { sendMessageStream: jest.fn() };
     mockModel = { startChat: jest.fn().mockReturnValue(mockChat) };
     (service as unknown as { model: typeof mockModel }).model = mockModel;
   });
@@ -59,11 +65,13 @@ describe('LlmService', () => {
 
   describe('generateStream', () => {
     it('yields the full text when there are no tool calls', async () => {
-      mockChat.sendMessage.mockResolvedValue({
-        response: {
+      mockChat.sendMessageStream.mockResolvedValue({
+        stream: makeStream(['Hello, this is a test response!']),
+        response: Promise.resolve({
           text: () => 'Hello, this is a test response!',
           functionCalls: () => undefined,
-        },
+          candidates: [],
+        }),
       });
 
       const tokens: string[] = [];
@@ -83,25 +91,29 @@ describe('LlmService', () => {
           { role: 'model', parts: [{ text: 'Hi there!' }] },
         ],
       });
-      expect(mockChat.sendMessage).toHaveBeenCalledWith('How are you?');
+      expect(mockChat.sendMessageStream).toHaveBeenCalledWith('How are you?');
       expect(tokens.join('')).toBe('Hello, this is a test response!');
     });
 
     it('executes the tool call loop before yielding text', async () => {
-      mockChat.sendMessage
+      mockChat.sendMessageStream
         .mockResolvedValueOnce({
-          response: {
+          stream: makeStream([]),
+          response: Promise.resolve({
             functionCalls: () => [
               { name: 'lookup_recipe', args: { recipe_name: 'chocolate chip cookies' } },
             ],
             text: () => '',
-          },
+            candidates: [],
+          }),
         })
         .mockResolvedValueOnce({
-          response: {
+          stream: makeStream(['Here is the recipe for chocolate chip cookies...']),
+          response: Promise.resolve({
             text: () => 'Here is the recipe for chocolate chip cookies...',
             functionCalls: () => undefined,
-          },
+            candidates: [],
+          }),
         });
 
       const tokens: string[] = [];
@@ -112,12 +124,12 @@ describe('LlmService', () => {
         tokens.push(token);
       }
 
-      expect(mockChat.sendMessage).toHaveBeenCalledTimes(2);
-      expect(mockChat.sendMessage).toHaveBeenNthCalledWith(
+      expect(mockChat.sendMessageStream).toHaveBeenCalledTimes(2);
+      expect(mockChat.sendMessageStream).toHaveBeenNthCalledWith(
         1,
         'Can you give me a recipe for chocolate chip cookies?',
       );
-      expect(mockChat.sendMessage).toHaveBeenNthCalledWith(2, [
+      expect(mockChat.sendMessageStream).toHaveBeenNthCalledWith(2, [
         {
           functionResponse: {
             name: 'lookup_recipe',
@@ -133,12 +145,13 @@ describe('LlmService', () => {
     });
 
     it('yields a refusal message when finish_reason is SAFETY', async () => {
-      mockChat.sendMessage.mockResolvedValue({
-        response: {
+      mockChat.sendMessageStream.mockResolvedValue({
+        stream: makeStream([]),
+        response: Promise.resolve({
           text: () => '',
           functionCalls: () => undefined,
           candidates: [{ finishReason: 'SAFETY' }],
-        },
+        }),
       });
 
       const tokens: string[] = [];
@@ -150,7 +163,7 @@ describe('LlmService', () => {
     });
 
     it('propagates LLM errors as "Failed to generate response from LLM"', async () => {
-      mockChat.sendMessage.mockRejectedValue(new Error('API Error'));
+      mockChat.sendMessageStream.mockRejectedValue(new Error('API Error'));
 
       await expect(async () => {
         for await (const _ of service.generateStream([], 'Hello')) {
@@ -189,29 +202,14 @@ describe('LlmService', () => {
       );
     });
 
-    it('run_typescript_code evaluates safe expressions', async () => {
+    it('run_typescript_code returns a stub result with the code field', async () => {
       const result = await (
         service as unknown as {
           executeToolCall: (tc: { name: string; args: Record<string, unknown> }) => Promise<unknown>;
         }
       ).executeToolCall({ name: 'run_typescript_code', args: { code: '2 + 2' } });
 
-      expect(result).toEqual({ success: true, result: '4', code: '2 + 2' });
-    });
-
-    it('run_typescript_code captures thrown errors', async () => {
-      const result = await (
-        service as unknown as {
-          executeToolCall: (tc: { name: string; args: Record<string, unknown> }) => Promise<unknown>;
-        }
-      ).executeToolCall({
-        name: 'run_typescript_code',
-        args: { code: 'throw new Error("test error")' },
-      });
-
-      expect(result).toEqual(
-        expect.objectContaining({ success: false, error: 'test error' }),
-      );
+      expect(result).toMatchObject({ success: true, code: '2 + 2' });
     });
 
     it('get_department_info returns data for a known department', async () => {

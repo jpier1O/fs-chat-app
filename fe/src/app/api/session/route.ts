@@ -6,12 +6,10 @@ const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
   sameSite: 'lax' as const,
-  maxAge: 60 * 30, // 30 minutes
+  maxAge: 60 * 30,
   path: '/',
 };
 
-// GET — called when the Server Component redirects here because there is no cookie.
-// Creates a session in NestJS, sets the HTTP-only cookie, and redirects to /.
 export async function GET(request: NextRequest) {
   try {
     const response = await fetch(`${API_URL}/chat/session`, { method: 'POST' });
@@ -31,7 +29,6 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST — called directly by the client (e.g. after a session expires).
 export async function POST() {
   try {
     const response = await fetch(`${API_URL}/chat/session`, { method: 'POST' });
@@ -51,7 +48,6 @@ export async function POST() {
   }
 }
 
-// DELETE — clears the session cookie.
 export async function DELETE() {
   try {
     const res = NextResponse.json({ success: true });

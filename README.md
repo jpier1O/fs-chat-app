@@ -63,6 +63,61 @@ The frontend service waits for the backend health-check before starting.
 
 ---
 
+## Sample Q&A Pairs
+
+### Q&A 1 — Domain knowledge (no tool call)
+
+**User:** What is the difference between al dente and overcooked pasta?
+
+**Assistant:**
+Al dente pasta is cooked until it still has a slight resistance when bitten — firm at the center but not raw or hard. The term means "to the tooth" in Italian. Overcooked pasta is soft, mushy, and loses its structure because the starch granules have absorbed too much water and broken down completely.
+
+For best results, taste-test the pasta 1–2 minutes before the package time. Drain it while still slightly firm — it will finish cooking from residual heat and any sauce it's tossed in.
+
+---
+
+### Q&A 2 — Tool call triggered (`lookup_recipe`)
+
+**User:** What ingredients do I need for chocolate chip cookies?
+
+**Assistant (tool call: `lookup_recipe("chocolate chip cookies")`):**
+Here's what you'll need for classic chocolate chip cookies (makes ~48):
+
+**Dry ingredients:**
+- 2¼ cups all-purpose flour
+- 1 tsp baking soda
+- 1 tsp salt
+
+**Wet ingredients:**
+- 1 cup butter, softened
+- ¾ cup granulated sugar
+- ¾ cup packed brown sugar
+- 2 large eggs
+- 2 tsp vanilla extract
+
+**Mix-ins:**
+- 2 cups chocolate chips
+
+Prep time is 15 minutes; bake at 375°F (190°C) for 9–11 minutes until golden brown.
+
+---
+
+### Q&A 3 — Multi-turn with tool call (`get_department_info`)
+
+**Turn 1**
+**User:** Who leads Engineering and how large is the team?
+
+**Assistant (tool call: `get_department_info("Engineering")`):**
+The Engineering department is led by **Sarah Johnson** and has **45 team members** across four sub-teams: Frontend, Backend, DevOps, and QA. They're based in Building A, Floor 3, and are responsible for product development, infrastructure management, quality assurance, and technical architecture.
+
+**Turn 2**
+**User:** How does HR compare in size?
+
+**Assistant (tool call: `get_department_info("HR")`):**
+HR, led by **Emily Rodriguez**, has just 12 people — about a quarter the size of Engineering. The team covers Recruiting, People Operations, and Learning & Development, and is located in Building A, Floor 1.
+
+---
+
 ## Test Scenarios
 
 ### Automated tests

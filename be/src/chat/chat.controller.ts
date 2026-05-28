@@ -11,7 +11,7 @@ export class ChatController {
     private readonly sessionService: SessionService,
   ) {}
 
-  // Kept for unit tests (no HTTP route)
+  // No HTTP decorator — used only in unit tests to exercise error paths.
   async sendMessage(sessionId: string, dto: SendMessageDto): Promise<MessageResponse> {
     return this.chatService.sendMessage(sessionId, dto);
   }

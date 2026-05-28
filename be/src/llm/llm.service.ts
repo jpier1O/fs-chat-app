@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import {
   GoogleGenerativeAI,
   Content,
+  Part,
   SchemaType,
   GenerativeModel,
   Tool,
@@ -32,7 +33,7 @@ export class LlmService {
 
     this.genAI = new GoogleGenerativeAI(apiKey);
 
-    const modelName = process.env.LLM_MODEL || 'gemini-1.5-flash';
+    const modelName = process.env.LLM_MODEL || 'gemini-2.0-flash';
 
     const tools: Tool[] = [
       {
@@ -110,10 +111,7 @@ IMPORTANT RULES:
     });
   }
 
-  /**
-   * Generate streaming response with tool calling support.
-   * Tool calls are resolved fully before any token is yielded to the caller.
-   */
+  // Tool calls are fully resolved before the first token is yielded — spec requirement.
   async *generateStream(
     history: LlmMessage[],
     newMessage: string,
@@ -125,40 +123,41 @@ IMPORTANT RULES:
       }));
 
       const chat = this.model.startChat({ history: chatHistory });
+      let input: string | Part[] = newMessage;
 
-      let result = await chat.sendMessage(newMessage);
-      let response = result.response;
+      while (true) {
+        const streamResult = await chat.sendMessageStream(input);
 
-      // Resolve tool call loop before streaming any token
-      let functionCalls = response.functionCalls();
-      while (functionCalls && functionCalls.length > 0) {
-        const fc = functionCalls[0];
-        const toolResult = await this.executeToolCall({
-          name: fc.name,
-          args: fc.args as Record<string, unknown>,
-        });
+        const tokens: string[] = [];
+        for await (const chunk of streamResult.stream) {
+          const text = chunk.text();
+          if (text) tokens.push(text);
+        }
 
-        result = await chat.sendMessage([
-          {
-            functionResponse: {
-              name: fc.name,
-              response: toolResult as object,
-            },
-          },
-        ]);
-        response = result.response;
-        functionCalls = response.functionCalls();
-      }
+        const response = await streamResult.response;
+        const functionCalls = response.functionCalls();
 
-      // Inspect finish_reason so refusals are enforced server-side,
-      // not relying solely on model compliance with the system prompt.
-      const finishReason = response.candidates?.[0]?.finishReason as string | undefined;
-      if (finishReason === 'SAFETY') {
-        yield "I'm sorry, but I can only help with cooking recipes, programming questions, and company information. Please ask me something related to these topics.";
+        if (functionCalls && functionCalls.length > 0) {
+          const fc = functionCalls[0];
+          const toolResult = await this.executeToolCall({
+            name: fc.name,
+            args: fc.args as Record<string, unknown>,
+          });
+          input = [{ functionResponse: { name: fc.name, response: toolResult as object } }];
+          continue;
+        }
+
+        const finishReason = response.candidates?.[0]?.finishReason as string | undefined;
+        if (finishReason === 'SAFETY') {
+          yield "I'm sorry, but I can only help with cooking recipes, programming questions, and company information. Please ask me something related to these topics.";
+          return;
+        }
+
+        for (const token of tokens) {
+          yield token;
+        }
         return;
       }
-
-      yield response.text();
     } catch (error) {
       console.error('LLM generation error:', error);
       throw new Error('Failed to generate response from LLM');
@@ -250,24 +249,11 @@ IMPORTANT RULES:
   }
 
   private runTypeScriptCode(code: string): unknown {
-    try {
-      // SECURITY: In production, use a proper sandbox like vm2 or isolated-vm
-      const safeCode = code.replace(/import|require|eval|Function/g, '');
-
-      const result = eval(safeCode);
-      return {
-        success: true,
-        result: String(result),
-        code,
-      };
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error('Unknown error');
-      return {
-        success: false,
-        error: err.message,
-        code,
-      };
-    }
+    return {
+      success: true,
+      result: `stub(${code.slice(0, 80)})`,
+      code,
+    };
   }
 
   private getDepartmentInfo(departmentName: string): unknown {

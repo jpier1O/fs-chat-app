@@ -6,7 +6,7 @@ export interface Turn {
   message: string;
   reply: string;
   turnIndex: number;
-  timestamp: string; // ISO-8601; serialised through Redis as JSON
+  timestamp: string;
 }
 
 export interface Session {
@@ -22,6 +22,7 @@ export class SessionService {
 
   constructor(@Inject('REDIS') protected readonly redis: Redis) {}
 
+  // Overridable in tests to inject a deterministic clock.
   protected now(): Date {
     return new Date();
   }
@@ -36,7 +37,6 @@ export class SessionService {
       lastAccessedAt: now,
     };
     await this.redis.set(`session:${sessionId}`, JSON.stringify(session));
-    // Track every created ID so we can distinguish 404 vs 410 later.
     await this.redis.sadd('session_ids', sessionId);
     return sessionId;
   }
@@ -92,7 +92,7 @@ export class SessionService {
     await this.redis.del(`session:${sessionId}`);
   }
 
-  /** For testing only — avoid KEYS in production. */
+  // redis.keys() is O(N) — only safe for tests, never call in production hot paths.
   async getAllSessions(): Promise<Map<string, Session>> {
     const keys = await this.redis.keys('session:*');
     const result = new Map<string, Session>();

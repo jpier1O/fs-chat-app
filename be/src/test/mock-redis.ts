@@ -1,7 +1,3 @@
-/**
- * In-memory Redis mock for unit tests.
- * Mirrors the ioredis API surface used by SessionService.
- */
 export class MockRedis {
   private store = new Map<string, string>();
   private sets = new Map<string, Set<string>>();
@@ -46,7 +42,6 @@ export class MockRedis {
     return Array.from(this.store.keys()).filter((k) => k.startsWith(prefix));
   }
 
-  /** Convenience: wipe all data between tests */
   flushAll(): void {
     this.store.clear();
     this.sets.clear();

@@ -5,9 +5,6 @@ import userEvent from '@testing-library/user-event';
 import ChatBox from '@/components/ChatBox';
 import type { Message } from '@/types/chat';
 
-// ── jsdom shims ───────────────────────────────────────────────────────────────
-
-// jsdom does not expose TextEncoder/TextDecoder/ReadableStream globally
 const { TextEncoder, TextDecoder } = require('util') as typeof import('util');
 const { ReadableStream } = require('stream/web') as typeof import('stream/web');
 (global as unknown as Record<string, unknown>).TextEncoder = TextEncoder;
@@ -15,16 +12,13 @@ const { ReadableStream } = require('stream/web') as typeof import('stream/web');
 (global as unknown as Record<string, unknown>).ReadableStream = ReadableStream;
 
 beforeAll(() => {
-  // jsdom does not implement scrollIntoView
   window.HTMLElement.prototype.scrollIntoView = jest.fn();
 });
 
-// crypto.randomUUID is not in jsdom
+let uuidCounter = 0;
 Object.defineProperty(global, 'crypto', {
-  value: { randomUUID: () => 'uuid-' + Math.random().toString(36).slice(2) },
+  value: { randomUUID: () => `test-uuid-${++uuidCounter}` },
 });
-
-// ── helpers ───────────────────────────────────────────────────────────────────
 
 function makeUserMsg(id: string, content: string): Message {
   return { id, type: 'user', content, timestamp: new Date() };
@@ -36,8 +30,6 @@ function makeBotMsg(id: string, content: string, turnIndex = 0): Message {
 
 function buildSseStream(events: string[]): ReadableStream<Uint8Array<ArrayBufferLike>> {
   const encoder = new TextEncoder();
-  // stream/web ReadableStream is structurally identical at runtime but its .d.ts
-  // diverges from the lib.dom type; cast to silence the cross-module mismatch.
   return new ReadableStream({
     start(controller) {
       for (const ev of events) {
@@ -48,11 +40,7 @@ function buildSseStream(events: string[]): ReadableStream<Uint8Array<ArrayBuffer
   }) as unknown as ReadableStream<Uint8Array<ArrayBufferLike>>;
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
-
 describe('ChatBox', () => {
-  const sessionId = 'test-session';
-
   beforeEach(() => {
     jest.clearAllMocks();
     global.fetch = jest.fn();
@@ -64,7 +52,7 @@ describe('ChatBox', () => {
       makeBotMsg('b0', 'Hi there!', 0),
     ];
 
-    render(<ChatBox sessionId={sessionId} initialMessages={messages} />);
+    render(<ChatBox initialMessages={messages} />);
 
     expect(screen.getByText('Hello')).toBeInTheDocument();
     expect(screen.getByText('Hi there!')).toBeInTheDocument();
@@ -72,15 +60,13 @@ describe('ChatBox', () => {
 
   it('shows optimistic user bubble before the server responds', async () => {
     const user = userEvent.setup();
-    // Fetch hangs — simulates an in-flight request
     (global.fetch as jest.Mock).mockReturnValue(new Promise(() => {}));
 
-    render(<ChatBox sessionId={sessionId} initialMessages={[]} />);
+    render(<ChatBox initialMessages={[]} />);
 
     await user.type(screen.getByPlaceholderText('Type your message...'), 'Test optimistic');
     await user.click(screen.getByRole('button', { name: /send/i }));
 
-    // Optimistic bubble appears immediately, before the server responds
     expect(screen.getByText('Test optimistic')).toBeInTheDocument();
   });
 
@@ -100,7 +86,7 @@ describe('ChatBox', () => {
       json: jest.fn(),
     });
 
-    render(<ChatBox sessionId={sessionId} initialMessages={[]} />);
+    render(<ChatBox initialMessages={[]} />);
 
     await user.type(screen.getByPlaceholderText('Type your message...'), 'Hi');
     await user.click(screen.getByRole('button', { name: /send/i }));
@@ -114,7 +100,7 @@ describe('ChatBox', () => {
     const user = userEvent.setup();
     (global.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
 
-    render(<ChatBox sessionId={sessionId} initialMessages={[]} />);
+    render(<ChatBox initialMessages={[]} />);
 
     await user.type(screen.getByPlaceholderText('Type your message...'), 'Failing');
     await user.click(screen.getByRole('button', { name: /send/i }));
@@ -128,22 +114,19 @@ describe('ChatBox', () => {
     const user = userEvent.setup();
 
     (global.fetch as jest.Mock)
-      // send message → sessionExpired
       .mockResolvedValueOnce({
         ok: false,
         status: 410,
         json: jest.fn().mockResolvedValue({ sessionExpired: true }),
         body: null,
       })
-      // DELETE /api/session (called by clearSession)
       .mockResolvedValueOnce({ ok: true, json: jest.fn() });
 
-    render(<ChatBox sessionId={sessionId} initialMessages={[]} />);
+    render(<ChatBox initialMessages={[]} />);
 
     await user.type(screen.getByPlaceholderText('Type your message...'), 'hello');
     await user.click(screen.getByRole('button', { name: /send/i }));
 
-    // Banner is set synchronously; window.location.reload fires 2 s later (not reached in test)
     await waitFor(() => {
       expect(screen.getByText(/session expired/i)).toBeInTheDocument();
     });
@@ -151,15 +134,34 @@ describe('ChatBox', () => {
 
   it('disables the Send button while a request is in-flight', async () => {
     const user = userEvent.setup();
-    // Fetch never resolves
     (global.fetch as jest.Mock).mockReturnValue(new Promise(() => {}));
 
-    render(<ChatBox sessionId={sessionId} initialMessages={[]} />);
+    render(<ChatBox initialMessages={[]} />);
 
     await user.type(screen.getByPlaceholderText('Type your message...'), 'test');
     const btn = screen.getByRole('button', { name: /send/i });
     await user.click(btn);
 
     expect(btn).toBeDisabled();
+  });
+
+  it('does not commit the optimistic user message to real state on error', async () => {
+    const user = userEvent.setup();
+    (global.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
+
+    const initial: Message[] = [makeUserMsg('u0', 'Earlier message')];
+    render(<ChatBox initialMessages={initial} />);
+
+    expect(screen.getByText('Earlier message')).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText('Type your message...'), 'rollback me');
+    await user.click(screen.getByRole('button', { name: /send/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Network error/i)).toBeInTheDocument();
+    }, { timeout: 3000 });
+
+    // The initial committed message is still the only one in real state.
+    expect(screen.getByText('Earlier message')).toBeInTheDocument();
   });
 });
